@@ -36,70 +36,79 @@ def get_tool_recommendation(query):
         return f"\n\nRecommended Quality Tool: **{tool_match['tool']}** (Confidence: {confidence:.1f}%)\n{tool_match['when_to_use']}"
     return ""
 
-async def ask_bot(query):
+async def ask_bot(query, chat_history=None, custom_index=None):
     # Initialize vector store if not already done
-    if vector_store is None:
+    if vector_store is None and custom_index is None:
         initialize_vector_store()
+
+    # Use the custom index if provided, otherwise use the default vector store
+    db = custom_index if custom_index else vector_store
     
-    # Run tool recommendation and document retrieval in parallel
+    # Run tool recommendation in parallel
     loop = asyncio.get_event_loop()
     tool_future = loop.run_in_executor(executor, get_tool_recommendation, query)
-    
-    # Get relevant documents
-    relevant_docs = vector_store.similarity_search(query, k=3)
 
-    # Load FAISS vector index for context
-    db = FAISS.load_local(
-        "vector_index", 
-        HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
-        allow_dangerous_deserialization=True
-    )
-    retriever = db.as_retriever()
-    
-    # Prepare context with source information
+    # Get relevant documents from vector DB
+    relevant_docs = db.similarity_search(query, k=3)
+
+    # Prepare context with source citations
     context_with_sources = []
     source_map = {}
-    
+
     for i, doc in enumerate(relevant_docs, 1):
-        source = doc.metadata.get('source', 'Unknown Source')
+        source = doc.metadata.get('source', 'Uploaded Document')
         source_id = f"[{i}]"
         source_map[source_id] = source
         context_with_sources.append(f"{doc.page_content} {source_id}")
-    
-    context = "\n\n".join(context_with_sources)
 
+    doc_context = "\n\n".join(context_with_sources)
+
+    # Format memory (last 2–3 exchanges)
+    memory_context = ""
+    if chat_history:
+        for msg in chat_history[-10:]:  # Last 5 rounds
+            role = "User" if msg["role"] == "user" else "Assistant"
+            memory_context += f"{role}: {msg['content']}\n"
+
+    # Final prompt
     prompt = f"""
-You are a quality assurance assistant. Use the following context from SOPs and QC manuals to answer the user question.
-The context includes source citations in [n] format. Include these citations in your answer when referencing specific information.
+You are a quality assurance assistant. Use the following SOP context and recent conversation to answer the user's latest question.
+Include citations [n] when referencing document content.
 
-Context:
-{context}
+Recent Conversation:
+{memory_context}
 
-Question:
+Document Context:
+{doc_context}
+
+Current Question:
 {query}
 
-Provide a clear and concise answer that:
-1. Directly addresses the question
-2. Uses citations [n] when referencing specific information from the context
-3. Explains any recommended quality tools and why they would be helpful
-4. Synthesizes information from multiple sources when relevant"""
+Your response should:
+1. Directly address the question
+2. Reference sources using [n] notation when relevant
+3. Recommend quality tools where applicable
+4. Be concise, helpful, and well-organized
+"""
 
-    # Get tool recommendation result from parallel execution
+    # Wait for tool recommendation to finish
     tool_recommendation = await tool_future
-    
-    # Generate response
+
+    # Generate answer from Gemini
     response = model.generate_content(prompt)
-    
-    # Combine results
-    answer = response.text + tool_recommendation
-    
-    # Add sources section
+    answer = response.text.strip() + tool_recommendation
+
+    # Add citation list
     if source_map:
         sources_section = "\n\nSources:"
         for source_id, source in source_map.items():
-            sources_section += f"\n{source_id} {os.path.basename(source)}"
+            # For uploaded files, the source might not be a path
+            if isinstance(source, str):
+                sources_section += f"\n{source_id} {os.path.basename(source)}"
+            else:
+                 sources_section += f"\n{source_id} Uploaded Document"
         answer += sources_section
-        
+
     return answer
 
 # Example

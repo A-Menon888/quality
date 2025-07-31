@@ -1,111 +1,94 @@
 import streamlit as st
 import asyncio
 from qa_bot import ask_bot
+import fitz  # PyMuPDF
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
 
-# Configure the Streamlit page
+# Configure Streamlit page
 st.set_page_config(
     page_title="Quality Assurance Assistant",
     page_icon="🎯",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Custom CSS for better styling
-st.markdown("""
-<style>
-    .main {
-        padding: 2rem;
-    }
-    .stTextInput {
-        margin-bottom: 1rem;
-    }
-    .response-box {
-        background-color: #f0f2f6;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    .tool-box {
-        background-color: #e1f5fe;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-top: 0.5rem;
-    }
-    .source-box {
-        background-color: #f5f5f5;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-top: 0.5rem;
-        font-size: 0.9em;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Initialize embeddings model (do this once)
+@st.cache_resource
+def get_embeddings():
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Main title with emoji
+embeddings = get_embeddings()
+
+# Helper functions for uploaded PDF
+def extract_text_from_pdf(file):
+    doc = fitz.open(stream=file.read(), filetype="pdf")
+    full_text = ""
+    for page in doc:
+        full_text += page.get_text()
+    return full_text
+
+def build_temp_faiss(text, embeddings):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    docs = splitter.create_documents([text])
+    # Add metadata to each doc chunk
+    for i, doc in enumerate(docs):
+        doc.metadata = {"source": f"Uploaded PDF Page Chunk {i+1}"}
+    return FAISS.from_documents(docs, embeddings)
+
+# Session state for chat memory
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Title
 st.title("🎯 Quality Assurance Assistant")
 st.markdown("---")
 
-# Create two columns for a better layout
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.markdown("### Ask a Question")
-    st.markdown("Get instant answers about quality processes, tools, and best practices.")
+# Sidebar for file upload and context
+with st.sidebar:
+    st.markdown("### 💬 Chat with a Document")
+    uploaded_file = st.file_uploader("Upload a PDF to analyze", type=["pdf"])
     
-    # Query input with a better placeholder
-    query = st.text_input(
-        "",  # Label hidden for cleaner look
-        placeholder="Example: What are the key steps in quality assurance testing?",
-        key="query_input"
-    )
-
-    if query:
-        with st.spinner('Analyzing your question...'):
-            # Run the async function
-            response = asyncio.run(ask_bot(query))
-            
-            # Split response into main content and sources
-            main_content = response
-            sources_section = ""
-            
-            if "\n\nSources:" in response:
-                main_content, sources_section = response.split("\n\nSources:", 1)
-            
-            # Display main content
-            st.markdown("<div class='response-box'>", unsafe_allow_html=True)
-            st.markdown(main_content)
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            # Display sources if available
-            if sources_section:
-                with st.expander("View Sources"):
-                    st.markdown("<div class='source-box'>", unsafe_allow_html=True)
-                    st.markdown(f"Sources:{sources_section}")
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-with col2:
-    st.markdown("### Tips")
+    st.markdown("---")
+    st.markdown("### 💡 Tips")
     st.info("""
-    **Try asking about:**
-    - Quality tools and when to use them
-    - Process improvement methods
-    - Quality control procedures
-    - Testing methodologies
-    - Best practices in QA
+    Ask about:
+    - Control charts
+    - Root cause analysis
+    - SOPs and audit steps
+    - Defect classification
     """)
-    
-    st.markdown("### About")
+    st.markdown("### ℹ️ About")
     st.success("""
-    This assistant uses:
-    - Advanced semantic search
-    - Quality tool recommendations
-    - Citations from reliable sources
-    - Real-time processing
+    This chatbot:
+    - Uses Gemini + RAG
+    - Recommends QC tools
+    - Supports document-based answers
     """)
+    if st.button("🧹 Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
-# Footer
-st.markdown("---")
-st.markdown(
-    "💡 *The assistant provides recommendations based on industry standards and best practices in quality assurance.*",
-    help="Responses are generated using context from quality management documents and industry-standard tools."
-)
+# Display chat history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# Chat input
+if user_input := st.chat_input("Ask about QA tools, methods, SOPs..."):
+    # Show user message
+    st.chat_message("user").markdown(user_input)
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # Get response
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            custom_index = None
+            if uploaded_file is not None:
+                pdf_text = extract_text_from_pdf(uploaded_file)
+                custom_index = build_temp_faiss(pdf_text, embeddings)
+            
+            response = asyncio.run(ask_bot(user_input, chat_history=st.session_state.messages, custom_index=custom_index))
+            st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
