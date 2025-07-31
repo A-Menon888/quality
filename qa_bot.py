@@ -15,7 +15,7 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # Initialize global resources
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vector_store = None
-model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+model = genai.GenerativeModel("gemini-2.5-flash-lite")
 executor = ThreadPoolExecutor(max_workers=3)  # For parallel operations
 
 def initialize_vector_store():
@@ -111,10 +111,4 @@ Your response should:
 
     return answer
 
-# Example
-if __name__ == "__main__":
-    async def main():
-        response = await ask_bot("What are the key steps in quality assurance testing?")
-        print(response)
-    
-    asyncio.run(main())
+
