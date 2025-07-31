@@ -2,15 +2,16 @@ import google.generativeai as genai
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 import os
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 from tool_recommender import check_for_tool
 from functools import lru_cache
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-
+import streamlit as st
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 # Load environment variables
-load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+#load_dotenv()
+#genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Initialize global resources
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
