@@ -133,9 +133,23 @@ Range: {max(measurements) - min(measurements):.3f}'''
             'is_normal': shapiro_p > 0.05 if shapiro_p is not None else None
         }
         
+        # Enhanced metadata for AI analysis
+        chart_metadata = {
+            'chart_type': 'histogram',
+            'bin_count': len(bins_edges) - 1,
+            'bin_width': (bins_edges[1] - bins_edges[0]) if len(bins_edges) > 1 else 0,
+            'data_range': [min(measurements), max(measurements)],
+            'distribution_shape': 'normal' if shapiro_p and shapiro_p > 0.05 else 'non-normal',
+            'outliers_detected': len([x for x in measurements if abs(x - mean_val) > 3 * std_val]) > 0,
+            'specification_limits': process_data.specifications if process_data.specifications else None,
+            'process_name': getattr(process_data, 'process_name', None),
+            'data_source': getattr(process_data, 'source', 'unknown')
+        }
+        
         return {
             'chart_bytes': chart_bytes,
             'statistics': statistics,
+            'chart_metadata': chart_metadata,
             'measurements': measurements,
             'bins': bins_edges
         }

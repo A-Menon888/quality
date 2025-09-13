@@ -9,6 +9,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 import re
+import json
+import datetime
 # Add these imports
 from dynamic_tool_generator import DynamicToolGenerator
 from ai_data_parser import AIDataParser
@@ -19,6 +21,71 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 # Load environment variables
 #load_dotenv()
 #genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Persona system
+def get_persona_prompt(persona: str) -> str:
+    """Get persona-specific system prompt for Gemini"""
+    
+    persona_prompts = {
+        "Novice Guide": """
+You are a friendly Novice Guide for Quality Assurance. Your role is to:
+
+1. **Explain concepts simply**: Use everyday analogies and avoid jargon
+2. **Provide step-by-step guidance**: Break down complex processes into manageable steps
+3. **Use encouraging language**: Be supportive and patient with beginners
+4. **Give practical examples**: Use relatable scenarios from daily life
+5. **Ask clarifying questions**: Help users understand what they need
+
+Example responses:
+- "Think of a control chart like a speedometer in your car - it shows when you're going too fast or too slow"
+- "Let's start with the basics. What specific quality issue are you trying to solve?"
+- "Don't worry, this might seem complex at first, but I'll walk you through it step by step"
+
+Always be encouraging and make quality concepts accessible to everyone.
+""",
+        
+        "Expert Consultant": """
+You are an Expert Quality Consultant with deep technical knowledge. Your role is to:
+
+1. **Use technical terminology**: Employ proper QA/QC terminology and standards
+2. **Reference methodologies**: Cite ISO standards, Six Sigma, Lean, etc.
+3. **Provide advanced analysis**: Offer sophisticated quality engineering insights
+4. **Discuss statistical concepts**: Use statistical process control terminology
+5. **Recommend best practices**: Suggest industry-standard approaches
+
+Example responses:
+- "Based on ISO 9001:2015 requirements, I recommend implementing statistical process control (SPC) with Cp/Cpk analysis"
+- "The process capability index indicates non-normal distribution, suggesting the need for transformation or alternative control limits"
+- "Consider implementing Design of Experiments (DOE) to optimize your process parameters"
+
+Always provide technically accurate, professional guidance suitable for quality engineers and managers.
+""",
+        
+        "Skeptical Manager": """
+You are a Skeptical Manager who challenges recommendations and demands proof. Your role is to:
+
+1. **Question effectiveness**: Ask "Why should I invest time/money in this?"
+2. **Demand evidence**: Request ROI data, case studies, and measurable benefits
+3. **Challenge assumptions**: Point out potential risks and limitations
+4. **Focus on business value**: Emphasize cost-benefit analysis and practical outcomes
+5. **Ask tough questions**: Probe for weaknesses in proposed solutions
+
+Example responses:
+- "Why should I spend time on SPC? Show me proof it works in our industry"
+- "What's the ROI on implementing this quality tool? How long until we see results?"
+- "That sounds good in theory, but what are the real-world limitations?"
+- "I've heard this before. What makes this different from other approaches that failed?"
+
+Always challenge recommendations constructively while focusing on practical business outcomes and measurable results.
+"""
+    }
+    
+    return persona_prompts.get(persona, persona_prompts["Novice Guide"])
+
+def apply_persona_to_prompt(base_prompt: str, persona: str) -> str:
+    """Apply persona-specific modifications to a prompt"""
+    persona_instruction = get_persona_prompt(persona)
+    return f"{persona_instruction}\n\n{base_prompt}"
 
 # Initialize global resources
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -47,7 +114,7 @@ def get_tool_recommendation(query):
     return ""
 
 
-async def ask_bot(query, chat_history=None, custom_index=None, image=None, mode=None):
+async def ask_bot(query, chat_history=None, custom_index=None, image=None, mode=None, persona="Novice Guide"):
     # Vision-only path: if an image is provided and mode is image, analyze image directly
     if mode == "image" and image is not None:
         loop = asyncio.get_event_loop()
@@ -60,7 +127,7 @@ async def ask_bot(query, chat_history=None, custom_index=None, image=None, mode=
             "and recommend a quality tool if helpful. Be concise and well-organized. "
             "Only say you don't know if the request is outside the QA scope, requires unavailable data from the image, or is a technical limitation."
         )
-
+        prompt_text = apply_persona_to_prompt(prompt_text, persona)
         # Gemini expects inline image data as bytes with mime type
         response = model.generate_content([
             {"text": prompt_text + "\n\nQuestion: " + query},
@@ -147,6 +214,7 @@ Your response should:
 
 4. Be concise, conversational, and organized.
 """
+    prompt = apply_persona_to_prompt(prompt, persona)
 
     # Wait for tool recommendation to finish
     tool_recommendation = await tool_future
@@ -179,10 +247,8 @@ data_forms = DataInputForms()
 tool_customization = ToolCustomizationPanel()
 export_manager = ExportManager()
 
-async def generate_qc_tool(query: str, chat_history=None, custom_index=None, image=None, mode=None):
-    """Generate actual QC tools based on user input"""
-
-    # Always scan recent user messages for numeric data
+async def _fallback_regex_extraction(query: str, chat_history=None):
+    """Fallback mechanism using regex to extract data from conversation history"""
     search_query = query
     if chat_history:
         found_numeric = False
@@ -198,15 +264,78 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
         # If no numeric history found, just stick with current query
         if not found_numeric:
             search_query = query
+    return search_query
 
-    query_lower = search_query.lower()
+async def generate_qc_tool(query: str, chat_history=None, custom_index=None, image=None, mode=None):
+    """Generate actual QC tools based on user input"""
+
+    # Primary mechanism: Use AI to extract data from conversation history
+    search_query = query
+    extracted_data = None
+    
+    if chat_history:
+        # Prepare conversation context for AI analysis
+        conversation_context = ""
+        for msg in chat_history[-5:]:  # Last 5 conversations
+            role = "User" if msg["role"] == "user" else "Assistant"
+            conversation_context += f"{role}: {msg['content']}\n"
+        
+        # Use AI to extract structured data from conversation history
+        try:
+            extracted_data = ai_data_parser.extract_structured_data(query, conversation_context)
+            
+            # If AI found relevant data, use it for chart generation
+            if extracted_data and any(extracted_data.values()):
+                search_query = query  # Keep original query for tool type detection
+                # The extracted_data will be used directly in chart generation
+            else:
+                # Fallback to regex-based extraction
+                search_query = await _fallback_regex_extraction(query, chat_history)
+        except Exception as e:
+            print(f"AI data extraction failed: {e}")
+            # Fallback to regex-based extraction
+            search_query = await _fallback_regex_extraction(query, chat_history)
+    else:
+        search_query = query
+
+    query_lower = query.lower()  # Use original query for tool type detection
 
     # PARETO CHART
-    if "pareto" in query_lower:
+    if "pareto" in query_lower or ("yes" in query_lower and "pareto" in query_lower) or ("a " in query_lower and "pareto" in query_lower) or ("please" in query_lower and "pareto" in query_lower):
+        # Try AI-extracted data first
+        if extracted_data and extracted_data.get('success') and extracted_data.get('data', {}).get('defect_data'):
+            defect_info = extracted_data['data']['defect_data']
+            if defect_info.get('categories') and defect_info.get('counts'):
+                from data_extractor import DefectData
+                
+                categories = defect_info['categories']
+                counts = defect_info['counts']
+                total_defects = sum(counts)
+                frequencies = [count / total_defects for count in counts]
+
+                defect_data = DefectData(
+                    categories=categories,
+                    counts=counts,
+                    frequencies=frequencies,
+                    total_defects=total_defects,
+                    source="ai_extraction"
+                )
+
+                try:
+                    result = dynamic_tool_generator.generate_tool("pareto_chart", defect_data)
+                    return result, None
+                except Exception as e:
+                    return None, f"Error generating Pareto chart: {str(e)}"
+        
+        # Fallback to regex extraction
         import re
         # Look for patterns like "Surface scratch 15, Dimensional error 8"
         defect_pattern = r'([^,]+?)\s+(\d+)'
         matches = re.findall(defect_pattern, search_query)
+        
+        # If no matches found in search_query, try the original query
+        if not matches:
+            matches = re.findall(defect_pattern, query)
 
         if matches:
             categories = []
@@ -225,7 +354,7 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
                 counts=counts,
                 frequencies=frequencies,
                 total_defects=total_defects,
-                source="ai_extraction"
+                source="regex_extraction"
             )
 
             try:
@@ -236,11 +365,37 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
 
     # CONTROL CHART
     elif "control chart" in query_lower or ("control" in query_lower and "chart" in query_lower):
+        # Try AI-extracted data first
+        if extracted_data and extracted_data.get('process_data'):
+            process_info = extracted_data['process_data']
+            if process_info.get('measurements'):
+                from data_extractor import ProcessData
+                
+                measurements = process_info['measurements']
+                specifications = process_info.get('specifications', {})
+                
+                process_data = ProcessData(
+                    measurements=measurements,
+                    specifications=specifications,
+                    sample_size=len(measurements)
+                )
+
+                try:
+                    result = dynamic_tool_generator.generate_tool("control_chart", process_data)
+                    return result, None
+                except Exception as e:
+                    return None, f"Error generating Control chart: {str(e)}"
+        
+        # Fallback to regex extraction
         import re
         from data_extractor import ProcessData
 
         measurement_pattern = r'(\d+\.?\d*)'
         measurements = [float(m) for m in re.findall(measurement_pattern, search_query) if float(m) > 0]
+        
+        # If no measurements found in search_query, try the original query
+        if not measurements:
+            measurements = [float(m) for m in re.findall(measurement_pattern, query) if float(m) > 0]
 
         usl_pattern = r'usl[:\s]*(\d+\.?\d*)'
         lsl_pattern = r'lsl[:\s]*(\d+\.?\d*)'
@@ -272,12 +427,31 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
                 return None, f"Error generating Control chart: {str(e)}"
 
     # HISTOGRAM
-    elif "histogram" in query_lower:
+    elif "histogram" in query_lower or ("yes" in query_lower and "histogram" in query_lower) or ("a " in query_lower and "histogram" in query_lower) or ("please" in query_lower and "histogram" in query_lower):
+        # Try AI-extracted data first
+        if extracted_data and extracted_data.get('success') and extracted_data.get('data', {}).get('process_data'):
+            process_info = extracted_data['data']['process_data']
+            if hasattr(process_info, 'measurements') and process_info.measurements:
+                # Use the ProcessData object directly
+                process_data = process_info
+
+                try:
+                    result = dynamic_tool_generator.generate_tool("histogram", process_data)
+                    return result, None
+                except Exception as e:
+                    return None, f"Error generating Histogram: {str(e)}"
+        
+        # Fallback to regex extraction
         import re
         from data_extractor import ProcessData
 
+        # Extract measurements from search_query (which includes conversation history)
         measurement_pattern = r'(\d+\.?\d*)'
         measurements = [float(m) for m in re.findall(measurement_pattern, search_query) if float(m) > 0]
+        
+        # If no measurements found in search_query, try the original query
+        if not measurements:
+            measurements = [float(m) for m in re.findall(measurement_pattern, query) if float(m) > 0]
 
         usl_pattern = r'usl[:\s]*(\d+\.?\d*)'
         lsl_pattern = r'lsl[:\s]*(\d+\.?\d*)'
@@ -309,12 +483,38 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
                 return None, f"Error generating Histogram: {str(e)}"
     # PROCESS CAPABILITY
     elif "capability" in query_lower or "cp" in query_lower or "cpk" in query_lower or "cp/cpk" in query_lower:
+        # Try AI-extracted data first
+        if extracted_data and extracted_data.get('process_data'):
+            process_info = extracted_data['process_data']
+            if process_info.get('measurements') and process_info.get('specifications'):
+                from data_extractor import ProcessData
+                
+                measurements = process_info['measurements']
+                specifications = process_info['specifications']
+                
+                process_data = ProcessData(
+                    measurements=measurements,
+                    specifications=specifications,
+                    sample_size=len(measurements)
+                )
+                
+                try:
+                    result = dynamic_tool_generator.generate_tool("capability_chart", process_data)
+                    return result, None
+                except Exception as e:
+                    return None, f"Error generating Process Capability analysis: {str(e)}"
+        
+        # Fallback to regex extraction
         import re
         from data_extractor import ProcessData
         
         # Extract measurements
         measurement_pattern = r'(\d+\.?\d*)'
         measurements = [float(m) for m in re.findall(measurement_pattern, search_query) if float(m) > 0]
+        
+        # If no measurements found in search_query, try the original query
+        if not measurements:
+            measurements = [float(m) for m in re.findall(measurement_pattern, query) if float(m) > 0]
         
         # Extract specification limits - improved patterns
         usl_pattern = r'usl[:\s]*(\d+\.?\d*)'
@@ -376,6 +576,26 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
     
     # FISHBONE DIAGRAM
     elif "fishbone" in query_lower or "root cause" in query_lower or ("cause" in query_lower and "diagram" in query_lower):
+        # Try AI-extracted data first
+        if extracted_data and extracted_data.get('success') and extracted_data.get('data', {}).get('cause_effect_data'):
+            cause_info = extracted_data['data']['cause_effect_data']
+            if cause_info.get('main_categories') and cause_info.get('sub_causes'):
+                from data_extractor import CauseEffectData
+                
+                cause_data = CauseEffectData(
+                    problem=cause_info.get('problem', 'Quality problem'),
+                    main_categories=cause_info['main_categories'],
+                    sub_causes=cause_info['sub_causes'],
+                    confidence=0.9  # Higher confidence for AI extraction
+                )
+                
+                try:
+                    result = dynamic_tool_generator.generate_tool("fishbone_diagram", cause_data)
+                    return result, None
+                except Exception as e:
+                    return None, f"Error generating Fishbone diagram: {str(e)}"
+        
+        # Fallback to regex extraction
         from data_extractor import CauseEffectData
         import re
         
@@ -395,7 +615,7 @@ async def generate_qc_tool(query: str, chat_history=None, custom_index=None, ima
         
         for category in categories:
             # Look for patterns like "Man: Training issues, Machine: Wear"
-            pattern = f'{category}[:\s]*([^,]+)'
+            pattern = rf'{category}[:\s]*([^,]+)'
             matches = re.findall(pattern, query_lower)
             if matches:
                 main_categories.append(category.title())
@@ -438,7 +658,7 @@ def get_tool_generation_suggestion(query: str) -> str:
         confidence = tool_match.get("confidence", 0) * 100
         return f"\n\nRecommended Quality Tool: **{tool_match['tool']}** (Confidence: {confidence:.1f}%)\n{tool_match['when_to_use']}"
 
-def get_chart_explanation(tool_type: str, data_summary: dict = None) -> str:
+def get_chart_explanation(tool_type: str, data_summary: dict = None, chart_metadata: dict = None) -> str:
     """Generate explanation for the generated chart"""
     
     explanations = {
@@ -528,16 +748,65 @@ This cause-and-effect diagram helps identify potential root causes. It organizes
             base_explanation += f"\n- Sample Size: {data_summary.get('sample_size', 'N/A')}"
     
     return base_explanation
-async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=None, image=None, mode=None):
+
+def get_ai_chart_explanation(tool_type: str, data_summary: dict = None, chart_metadata: dict = None) -> str:
+    """Generate AI-powered explanation for the generated chart using structured data"""
+    
+    if not data_summary and not chart_metadata:
+        return f"**📊 {tool_type.replace('_', ' ').title()} Analysis:**\nThis chart helps analyze your quality data."
+    
+    # Create detailed prompt for Gemini
+    prompt = f"""
+You are a Quality Assurance expert analyzing a {tool_type.replace('_', ' ').title()}. 
+
+Based on the following structured data and statistics, provide a clear, concise explanation of what this chart shows from a QA/analysis perspective.
+
+Tool Type: {tool_type}
+Statistics: {json.dumps(data_summary or {}, indent=2)}
+Chart Metadata: {json.dumps(chart_metadata or {}, indent=2)}
+
+Please provide:
+1. A brief overview of what the chart represents
+2. Key findings from the data (specific numbers, patterns, trends)
+3. Quality implications and what this means for process improvement
+4. Any concerns or recommendations based on the data
+
+Be specific about the actual values and statistics. Focus on actionable insights for quality professionals.
+Keep the explanation clear and professional, suitable for a quality engineer or manager.
+"""
+
+    try:
+        # Use Gemini to generate explanation
+        response = model.generate_content(prompt)
+        explanation = response.text.strip()
+        
+        # Add a header with the tool type
+        header = f"**📊 {tool_type.replace('_', ' ').title()} Analysis:**\n\n"
+        return header + explanation
+        
+    except Exception as e:
+        # Fallback to basic explanation if Gemini fails
+        return get_chart_explanation(tool_type, data_summary)
+
+async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=None, image=None, mode=None, persona="Novice Guide"):
     """Enhanced ask_bot function with tool generation capability"""
     
     # Check if this is a tool generation request
-    if any(keyword in query.lower() for keyword in ["generate", "create", "build", "make", "pareto", "histogram", "control chart", "capability", "fishbone", "chart"]):
+    query_lower = query.lower()
+    is_tool_request = (
+        any(keyword in query_lower for keyword in ["generate", "create", "build", "make", "chart"]) or
+        any(tool in query_lower for tool in ["pareto", "histogram", "control chart", "capability", "fishbone"]) or
+        ("yes" in query_lower and any(tool in query_lower for tool in ["histogram", "pareto", "control", "capability", "fishbone"])) or
+        ("please" in query_lower and any(tool in query_lower for tool in ["histogram", "pareto", "control", "capability", "fishbone"])) or
+        ("a " in query_lower and any(tool in query_lower for tool in ["histogram", "pareto", "control", "capability", "fishbone"]))
+    )
+    
+    if is_tool_request:
         tool_result, error = await generate_qc_tool(query, chat_history, custom_index, image, mode)
         
         if tool_result and tool_result.success:
             # Generate chart explanation
-            explanation = get_chart_explanation(tool_result.tool_type, tool_result.data_summary)
+            explanation = get_ai_chart_explanation(tool_result.tool_type, tool_result.data_summary, tool_result.chart_metadata)
             
             return {
                 "type": "tool_generation",
@@ -552,7 +821,7 @@ async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=No
             }
     
     # Fall back to regular chatbot response
-    regular_response = await ask_bot(query, chat_history, custom_index, image, mode)
+    regular_response = await ask_bot(query, chat_history, custom_index, image, mode, persona)
     
     # Add tool generation suggestion
     suggestion = get_tool_generation_suggestion(query)
@@ -562,16 +831,18 @@ async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=No
         "message": regular_response + suggestion
     }
 
-async def ask_bot_with_escalation(query, chat_history=None, custom_index=None, image=None, mode=None, recipient_email=None):
+async def ask_bot_with_escalation(query, chat_history=None, custom_index=None, image=None, mode=None, recipient_email=None, persona="Novice Guide"):
     """Enhanced ask_bot function with LLM-determined escalation"""
     
     # Get the original response
-    response = await ask_bot_with_tool_generation(query, chat_history, custom_index, image, mode)
+    response = await ask_bot_with_tool_generation(query, chat_history, custom_index, image, mode, persona)
     
-    # Extract response text
+    # Don't escalate if tool generation was successful
+    if response["type"] == "tool_generation":
+        return response
+    
+    # Extract response text for escalation check
     if response["type"] == "chat_response":
-        response_text = response["message"]
-    elif response["type"] == "tool_generation":
         response_text = response["message"]
     elif response["type"] == "error":
         response_text = response["message"]
@@ -591,7 +862,7 @@ Please respond with ONLY one of these options:
 
 Do not provide any explanation, just respond with either "ESCALATE" or "CONFIDENT".
 """
-    
+    confidence_check_prompt = apply_persona_to_prompt(confidence_check_prompt, persona)
     # Get LLM's self-assessment
     confidence_response = model.generate_content(confidence_check_prompt)
     confidence_decision = confidence_response.text.strip().upper()

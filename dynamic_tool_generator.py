@@ -17,6 +17,7 @@ class ToolGenerationResult:
     chart_data: Optional[bytes] = None
     chart_html: Optional[str] = None
     data_summary: Optional[Dict[str, Any]] = None
+    chart_metadata: Optional[Dict[str, Any]] = None
     error_message: str = ""
 
 class BaseToolGenerator:
@@ -99,7 +100,22 @@ class ParetoChartGenerator(BaseToolGenerator):
                 "pareto_80_percent": len([f for f in cumulative_freq if f <= 80])
             }
             
-            return ToolGenerationResult(True, "Pareto Chart", chart_data=chart_bytes, data_summary=data_summary)
+            # Enhanced metadata for AI analysis
+            chart_metadata = {
+                'chart_type': 'pareto_chart',
+                'defect_categories': categories,
+                'defect_counts': counts,
+                'defect_frequencies': [f * 100 for f in frequencies],
+                'cumulative_frequencies': cumulative_freq.tolist(),
+                'pareto_80_rule_applied': True,
+                'top_3_categories': categories[:3] if len(categories) >= 3 else categories,
+                'top_3_percentage': sum(frequencies[:3]) * 100 if len(frequencies) >= 3 else sum(frequencies) * 100,
+                'time_period': getattr(defect_data, 'time_period', None),
+                'data_source': getattr(defect_data, 'source', 'unknown'),
+                'pareto_effectiveness': 'high' if len([f for f in cumulative_freq if f <= 80]) <= 3 else 'medium' if len([f for f in cumulative_freq if f <= 80]) <= 5 else 'low'
+            }
+            
+            return ToolGenerationResult(True, "Pareto Chart", chart_data=chart_bytes, data_summary=data_summary, chart_metadata=chart_metadata)
         except Exception as e:
             return ToolGenerationResult(False, "Pareto Chart", error_message=f"Error generating Pareto chart: {str(e)}")
 

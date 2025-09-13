@@ -138,9 +138,32 @@ class ControlChartGenerator:
             'process_capable': len(out_of_control) == 0
         }
         
+        # Enhanced metadata for AI analysis
+        chart_metadata = {
+            'chart_type': 'control_chart',
+            'chart_subtype': 'xbar_r',
+            'subgroup_size': subgroup_size,
+            'total_subgroups': len(subgroup_means),
+            'control_limits': {
+                'ucl_xbar': ucl_xbar,
+                'lcl_xbar': lcl_xbar,
+                'ucl_r': ucl_r,
+                'lcl_r': lcl_r
+            },
+            'process_center': grand_mean,
+            'process_variation': mean_range,
+            'out_of_control_points': len(out_of_control),
+            'process_stability': 'stable' if len(out_of_control) == 0 else 'unstable',
+            'specification_limits': process_data.specifications if process_data.specifications else None,
+            'process_name': getattr(process_data, 'process_name', None),
+            'data_source': getattr(process_data, 'source', 'unknown'),
+            'trend_analysis': 'no_trend' if len(out_of_control) == 0 else 'trend_detected'
+        }
+        
         return {
             'chart_bytes': chart_bytes,
             'statistics': statistics,
+            'chart_metadata': chart_metadata,
             'subgroup_means': subgroup_means,
             'subgroup_ranges': subgroup_ranges
         }

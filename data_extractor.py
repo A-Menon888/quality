@@ -23,6 +23,7 @@ class ProcessData:
     sample_size: int
     time_series: Optional[List[datetime]] = None
     process_name: Optional[str] = None
+    source: Optional[str] = None
 
 @dataclass
 class CauseEffectData:

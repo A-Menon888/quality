@@ -116,9 +116,25 @@ class ParetoChartGenerator:
             'pareto_80_percentage': cumulative_freq[pareto_80_count-1] if pareto_80_count > 0 else 0
         }
         
+        # Enhanced metadata for AI analysis
+        chart_metadata = {
+            'chart_type': 'pareto_chart',
+            'defect_categories': categories,
+            'defect_counts': counts,
+            'defect_frequencies': [f * 100 for f in frequencies],
+            'cumulative_frequencies': cumulative_freq.tolist(),
+            'pareto_80_rule_applied': True,
+            'top_3_categories': categories[:3] if len(categories) >= 3 else categories,
+            'top_3_percentage': sum(frequencies[:3]) * 100 if len(frequencies) >= 3 else sum(frequencies) * 100,
+            'time_period': getattr(defect_data, 'time_period', None),
+            'data_source': getattr(defect_data, 'source', 'unknown'),
+            'pareto_effectiveness': 'high' if pareto_80_count <= 3 else 'medium' if pareto_80_count <= 5 else 'low'
+        }
+        
         return {
             'chart_bytes': chart_bytes,
             'statistics': statistics,
+            'chart_metadata': chart_metadata,
             'categories': categories,
             'counts': counts,
             'frequencies': frequencies,

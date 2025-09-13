@@ -198,9 +198,40 @@ Capability Assessment:
             'capability_grade': self._get_capability_grade(cpk)
         }
         
+        # Enhanced metadata for AI analysis
+        chart_metadata = {
+            'chart_type': 'process_capability',
+            'capability_indices': {
+                'cp': cp,
+                'cpu': cpu,
+                'cpl': cpl,
+                'cpk': cpk
+            },
+            'specification_limits': {
+                'usl': usl,
+                'lsl': lsl,
+                'target': target,
+                'tolerance': tolerance
+            },
+            'process_performance': {
+                'sigma_level': sigma_level,
+                'defect_rate': total_defect_rate,
+                'ppm': ppm,
+                'capability_grade': self._get_capability_grade(cpk)
+            },
+            'process_center': mean_val,
+            'process_spread': std_val,
+            'capability_assessment': 'capable' if cpk >= 1.33 else 'marginal' if cpk >= 1.0 else 'incapable',
+            'six_sigma_status': 'achieved' if sigma_level >= 6 else 'not_achieved',
+            'process_name': getattr(process_data, 'process_name', None),
+            'data_source': getattr(process_data, 'source', 'unknown'),
+            'improvement_priority': 'high' if cpk < 1.0 else 'medium' if cpk < 1.33 else 'low'
+        }
+        
         return {
             'chart_bytes': chart_bytes,
             'statistics': statistics,
+            'chart_metadata': chart_metadata,
             'measurements': measurements
         }
     

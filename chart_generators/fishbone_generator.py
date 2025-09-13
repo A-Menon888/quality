@@ -146,9 +146,25 @@ class FishboneDiagramGenerator:
             'categories_with_causes': len([cat for cat in cause_effect_data.sub_causes if cause_effect_data.sub_causes[cat]])
         }
         
+        # Enhanced metadata for AI analysis
+        chart_metadata = {
+            'chart_type': 'fishbone_diagram',
+            'problem_statement': cause_effect_data.problem,
+            'main_categories': cause_effect_data.main_categories,
+            'sub_causes_by_category': cause_effect_data.sub_causes,
+            'total_sub_causes': total_sub_causes,
+            'analysis_confidence': cause_effect_data.confidence,
+            'categories_with_causes': len([cat for cat in cause_effect_data.sub_causes if cause_effect_data.sub_causes[cat]]),
+            'analysis_completeness': 'complete' if len(cause_effect_data.main_categories) >= 4 else 'partial',
+            'cause_diversity': 'high' if total_sub_causes >= 10 else 'medium' if total_sub_causes >= 5 else 'low',
+            'data_source': getattr(cause_effect_data, 'source', 'unknown'),
+            'root_cause_analysis_status': 'in_progress' if cause_effect_data.confidence < 0.8 else 'completed'
+        }
+        
         return {
             'chart_bytes': chart_bytes,
             'statistics': statistics,
+            'chart_metadata': chart_metadata,
             'main_categories': cause_effect_data.main_categories,
             'sub_causes': cause_effect_data.sub_causes
         }

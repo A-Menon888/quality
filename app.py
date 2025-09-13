@@ -230,6 +230,46 @@ with st.sidebar:
     - ESCALATION_PASSWORD  
     - MANAGER_EMAIL
     """)
+    
+    # Persona selection section
+    st.markdown("---")
+    st.markdown("### 🎭 Chatbot Persona")
+    
+    # Persona selection dropdown
+    persona_options = {
+        "Novice Guide": {
+            "description": "Explains tools simply with analogies and step-by-step guidance",
+            "icon": "🌱"
+        },
+        "Expert Consultant": {
+            "description": "Uses technical terms and advanced quality methodologies",
+            "icon": "🎓"
+        },
+        "Skeptical Manager": {
+            "description": "Challenges recommendations and asks for proof of effectiveness",
+            "icon": "🤔"
+        }
+    }
+    
+    # Create persona selection with descriptions
+    selected_persona = st.selectbox(
+        "Choose your preferred interaction style:",
+        options=list(persona_options.keys()),
+        index=0,  # Default to Novice Guide
+        help="Select how you'd like the chatbot to respond to your queries"
+    )
+    
+    # Display selected persona info
+    persona_info = persona_options[selected_persona]
+    st.info(f"""
+    **{persona_info['icon']} {selected_persona}**
+    
+    {persona_info['description']}
+    """)
+    
+    # Store persona in session state
+    st.session_state.selected_persona = selected_persona
+    
     if st.button("🧹 Clear Chat"):
         st.session_state.messages = []
         st.rerun()
@@ -449,7 +489,8 @@ if user_input := st.chat_input("Ask about QA tools, methods, SOPs, or generate c
                     custom_index=custom_index,
                     image=image_payload,
                     mode="image" if image_payload else None,
-                    recipient_email=st.session_state.get("recipient_email")
+                    recipient_email=st.session_state.get("recipient_email"),
+                    persona=st.session_state.get("selected_persona", "Novice Guide")
                 )
             )
 
