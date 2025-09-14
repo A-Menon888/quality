@@ -4,6 +4,27 @@ from typing import Dict, Any, List, Optional
 from data_extractor import DefectData, ProcessData, CauseEffectData
 
 class DataInputForms:
+    def _csv_or_excel_upload_entry(self) -> List[float]:
+        """CSV or Excel upload for process measurements"""
+        uploaded_file = st.file_uploader("Upload CSV or Excel file", type=['csv', 'xlsx', 'xls'])
+        if uploaded_file:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                st.write("**Preview of uploaded data:**")
+                st.dataframe(df.head())
+                # Select column
+                if len(df.columns) > 1:
+                    column = st.selectbox("Select measurement column", df.columns)
+                else:
+                    column = df.columns[0]
+                measurements = df[column].dropna().tolist()
+                return measurements
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
+        return []
     """Forms for manual data entry and validation"""
     
     def __init__(self):
@@ -69,43 +90,34 @@ class DataInputForms:
     
     def process_data_form(self, existing_data: Optional[ProcessData] = None) -> Optional[ProcessData]:
         """Form for entering process measurement data"""
-        
         st.markdown("### ⚙️ Process Data Entry")
-        
         # Data input method selection
         input_method = st.radio(
             "Data Input Method",
-            ["Manual Entry", "CSV Upload", "Paste from Excel"],
+            ["Manual Entry", "CSV/Excel Upload", "Paste from Excel"],
             horizontal=True
         )
-        
         measurements = []
         specifications = {}
-        
         if input_method == "Manual Entry":
             measurements = self._manual_measurement_entry(existing_data)
-        elif input_method == "CSV Upload":
-            measurements = self._csv_upload_entry()
+        elif input_method == "CSV/Excel Upload":
+            measurements = self._csv_or_excel_upload_entry()
         elif input_method == "Paste from Excel":
             measurements = self._excel_paste_entry()
-        
         # Specification limits
         st.markdown("**Specification Limits:**")
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             usl = st.number_input("Upper Spec Limit (USL)", value=0.0, step=0.001, format="%.3f")
         with col2:
             lsl = st.number_input("Lower Spec Limit (LSL)", value=0.0, step=0.001, format="%.3f")
         with col3:
             target = st.number_input("Target Value", value=(usl + lsl) / 2 if usl and lsl else 0.0, step=0.001, format="%.3f")
-        
         if usl and lsl:
             specifications = {'usl': usl, 'lsl': lsl, 'target': target}
-        
         # Process name
         process_name = st.text_input("Process Name (Optional)", placeholder="e.g., Injection Molding")
-        
         # Display current data
         if measurements:
             st.markdown("**Current Measurements:**")
@@ -114,7 +126,6 @@ class DataInputForms:
                 'Measurement': measurements
             })
             st.dataframe(df, use_container_width=True)
-            
             # Basic statistics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -125,7 +136,6 @@ class DataInputForms:
                 st.metric("Std Dev", f"{pd.Series(measurements).std():.3f}")
             with col4:
                 st.metric("Range", f"{max(measurements) - min(measurements):.3f}")
-        
         # Generate ProcessData object
         if measurements:
             return ProcessData(
@@ -133,9 +143,8 @@ class DataInputForms:
                 specifications=specifications,
                 sample_size=len(measurements),
                 process_name=process_name or None,
-                source="manual_input"
+                source="file_upload" if input_method == "CSV/Excel Upload" else "manual_input"
             )
-        
         return None
     
     def cause_effect_data_form(self, existing_data: Optional[CauseEffectData] = None) -> Optional[CauseEffectData]:

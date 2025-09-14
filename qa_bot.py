@@ -114,7 +114,7 @@ def get_tool_recommendation(query):
     return ""
 
 
-async def ask_bot(query, chat_history=None, custom_index=None, image=None, mode=None, persona="Novice Guide"):
+async def ask_bot(query, chat_history=None, custom_index=None, image=None, mode=None, persona="Novice Guide", csv_context=None):
     # Vision-only path: if an image is provided and mode is image, analyze image directly
     if mode == "image" and image is not None:
         loop = asyncio.get_event_loop()
@@ -168,10 +168,10 @@ async def ask_bot(query, chat_history=None, custom_index=None, image=None, mode=
         for msg in chat_history[-30:]:  # Last 5 rounds
             role = "User" if msg["role"] == "user" else "Assistant"
             memory_context += f"{role}: {msg['content']}\n"
-
+    csv_text = f"\nUploaded CSV/Excel Context:\n{csv_context}\n" if csv_context else ""
     # Final prompt
     prompt = f"""
-You are a quality assurance assistant. Use the provided SOP context, uploaded PDFs, and recent conversation to answer the user’s latest question.
+You are a quality assurance assistant. Use the provided SOP context, uploaded PDFs, uploaded Excel/CSV data and recent conversation to answer the user’s latest question.
 
 Rules:
 
@@ -201,6 +201,7 @@ Recent Conversation:
 Document Context:
 {doc_context}
 
+{csv_text}
 Current Question:
 {query}
 
@@ -788,7 +789,7 @@ Keep the explanation clear and professional, suitable for a quality engineer or 
         # Fallback to basic explanation if Gemini fails
         return get_chart_explanation(tool_type, data_summary)
 
-async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=None, image=None, mode=None, persona="Novice Guide"):
+async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=None, image=None, mode=None, persona="Novice Guide", csv_context=None):
     """Enhanced ask_bot function with tool generation capability"""
     
     # Check if this is a tool generation request
@@ -821,7 +822,7 @@ async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=No
             }
     
     # Fall back to regular chatbot response
-    regular_response = await ask_bot(query, chat_history, custom_index, image, mode, persona)
+    regular_response = await ask_bot(query, chat_history, custom_index, image, mode, persona, csv_context=csv_context)
     
     # Add tool generation suggestion
     suggestion = get_tool_generation_suggestion(query)
@@ -831,11 +832,11 @@ async def ask_bot_with_tool_generation(query, chat_history=None, custom_index=No
         "message": regular_response + suggestion
     }
 
-async def ask_bot_with_escalation(query, chat_history=None, custom_index=None, image=None, mode=None, recipient_email=None, persona="Novice Guide"):
+async def ask_bot_with_escalation(query, chat_history=None, custom_index=None, image=None, mode=None, recipient_email=None, persona="Novice Guide", csv_context=None):
     """Enhanced ask_bot function with LLM-determined escalation"""
     
     # Get the original response
-    response = await ask_bot_with_tool_generation(query, chat_history, custom_index, image, mode, persona)
+    response = await ask_bot_with_tool_generation(query, chat_history, custom_index, image, mode, persona, csv_context=csv_context)
     
     # Don't escalate if tool generation was successful
     if response["type"] == "tool_generation":
@@ -857,10 +858,11 @@ User's Question: {query}
 Your Response: {response_text}
 
 Please respond with ONLY one of these options:
-1. "ESCALATE" - if you are uncertain, lack sufficient information, or need human expertise
-2. "CONFIDENT" - if you are confident in your response and no escalation is needed
+1. "ESCALATE" - if the nature of the task is critical and you are absolutely clueless
+2. "CONFIDENT" - otherwise if you are confident in your response and no escalation is needed
+3. "IDK" - if you are unsure, lack sufficient information, or need more context, but escalation is NOT critical
 
-Do not provide any explanation, just respond with either "ESCALATE" or "CONFIDENT".
+Do not provide any explanation, just respond with either "ESCALATE", "IDK" or "CONFIDENT".
 """
     confidence_check_prompt = apply_persona_to_prompt(confidence_check_prompt, persona)
     # Get LLM's self-assessment

@@ -9,11 +9,12 @@ import io
 import datetime
 import textwrap
 import re
-# Add these imports
 from qa_bot import ask_bot_with_tool_generation, ask_bot_with_escalation, dynamic_tool_generator, tool_display, data_forms, tool_customization, export_manager, get_chart_explanation
 import asyncio
 from tool_recommender import check_for_tool, check_for_tool_generation, enhanced_tool_lookup
-# Configure Streamlit page
+import pandas as pd
+from typing import Dict, Any, List, Optional
+from data_extractor import DefectData, ProcessData, CauseEffectData
 st.set_page_config(
     page_title="Quality Assurance Assistant",
     page_icon="🎯",
@@ -48,6 +49,14 @@ def build_temp_faiss(text, embeddings):
     for i, doc in enumerate(docs):
         doc.metadata = {"source": f"Uploaded PDF Page Chunk {i+1}"}
     return FAISS.from_documents(docs, embeddings)
+# Helper to get CSV/Excel data as string for Gemini
+def get_csv_excel_context():
+    df = st.session_state.get("uploaded_csv_excel_df")
+    if df is not None:
+        # limit rows/cols for prompt size if needed
+        preview = df.head(30)
+        return f"Uploaded CSV/Excel data (showing up to 30 rows):\n{preview.to_csv(index=False)}"
+    return ""
 
 # ---------- PDF Export Utilities ----------
 
@@ -143,8 +152,62 @@ st.markdown("---")
 # Sidebar for file upload and context
 with st.sidebar:
     st.markdown("### 💬 Chat with a Document or Image")
+
     uploaded_file = st.file_uploader("Upload a PDF to analyze", type=["pdf"])
     uploaded_image = st.file_uploader("Upload an image (Vision mode)", type=["png", "jpg", "jpeg"], key="image_uploader")
+    uploaded_csv_excel = st.file_uploader("Upload a CSV or Excel file to analyze", type=["csv", "xlsx", "xls"], key="csv_excel_uploader")
+
+    if uploaded_csv_excel is not None:
+        try:
+            if uploaded_csv_excel.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_csv_excel)
+            else:
+                df = pd.read_excel(uploaded_csv_excel)
+
+            st.write("**Preview of uploaded data:**")
+            st.dataframe(df.head())
+
+            # Store in session state for chatbot use
+            st.session_state.uploaded_csv_excel_df = df
+            st.success("CSV/Excel file loaded and available for chat analysis!")
+
+            # Select column for analysis
+            if len(df.columns) > 1:
+                column = st.selectbox("Select column to analyze", df.columns, key="csv_excel_column_select")
+            else:
+                column = df.columns[0]
+
+            measurements = df[column].dropna().tolist()
+
+            # Optional: run analysis
+            if st.button("Analyze Uploaded Data", key="analyze_csv_excel"):
+                from data_extractor import ProcessData
+                process_data = ProcessData(
+                    measurements=measurements,
+                    specifications={},
+                    sample_size=len(measurements),
+                    process_name=None,
+                    source="file_upload"
+                )
+                result = dynamic_tool_generator.generate_tool("process_capability", process_data)
+
+                if result.success:
+                    st.success("✅ Data analyzed!")
+                    tool_display.display_generated_tool(
+                        {
+                            "success": True,
+                            "chart_data": result.chart_data,
+                            "statistics": result.data_summary
+                        },
+                        "process_capability",
+                        show_statistics=True,
+                        show_customization=False
+                    )
+                else:
+                    st.error(f"❌ {result.error_message}")
+
+        except Exception as e:
+            st.error(f"Error reading or analyzing file: {str(e)}")
 
     image_mode = None
     if uploaded_image is not None:
@@ -466,6 +529,7 @@ if user_input := st.chat_input("Ask about QA tools, methods, SOPs, or generate c
     # Show user message
     st.chat_message("user").markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
+    
 
     # Get response with tool generation capability
     with st.chat_message("assistant"):
@@ -481,7 +545,7 @@ if user_input := st.chat_input("Ask about QA tools, methods, SOPs, or generate c
                     "bytes": uploaded_image.getvalue(),
                     "mime": uploaded_image.type or "image/jpeg"
                 }
-
+            csv_context = get_csv_excel_context()
             response = asyncio.run(
                 ask_bot_with_escalation(
                     user_input,
@@ -490,7 +554,8 @@ if user_input := st.chat_input("Ask about QA tools, methods, SOPs, or generate c
                     image=image_payload,
                     mode="image" if image_payload else None,
                     recipient_email=st.session_state.get("recipient_email"),
-                    persona=st.session_state.get("selected_persona", "Novice Guide")
+                    persona=st.session_state.get("selected_persona", "Novice Guide"),
+                    csv_context=csv_context
                 )
             )
 
